@@ -33,6 +33,7 @@ export default function Home() {
   const [revealedBins, setRevealedBins] = useState([]);
   const [loading, setLoading] = useState(false);
   const [hoveredCounty, setHoveredCounty] = useState(null);
+  
 
   // Fires the moment a county is clicked, so the circle appears right
   // alongside the popup -- before Scan is even pressed.

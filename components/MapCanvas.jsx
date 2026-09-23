@@ -72,6 +72,93 @@ function MapCanvas({
 
   const [zoom, setZoom] = useState(initialZoom ?? 4.2);
 
+  // Init map once.
+  useEffect(() => {
+    if (!containerRef.current || mapRef.current) return;
+    const map = new maplibregl.Map({
+      container: containerRef.current,
+      style: SAT_STYLE,
+      center: initialCenter
+        ? [initialCenter.lng, initialCenter.lat]
+        : [-95.5, 40.5],
+      zoom: initialZoom ?? 4.2,
+      attributionControl: true,
+    });
+    map.addControl(
+      new maplibregl.NavigationControl({ showCompass: false }),
+      "bottom-right",
+    );
+    mapRef.current = map;
+    const updateZoom = () => setZoom(map.getZoom());
+    map.on("zoom", updateZoom);
+    updateZoom();
+
+    // Hand the API straight to the parent as soon as the map instance
+    // exists — a plain callback prop, not a forwarded ref, so this always
+    // fires regardless of how MapCanvas itself was loaded/mounted.
+    onMapReady?.({
+      flyTo(lat, lng, zoom = 9) {
+        mapRef.current?.flyTo({ center: [lng, lat], zoom, duration: 1400 });
+      },
+    });
+
+    map.on("load", async () => {
+      const topo = await fetch(
+        "https://unpkg.com/us-atlas@3/counties-10m.json",
+      ).then((r) => r.json());
+      const countiesFC = topojson.feature(topo, topo.objects.counties);
+      const statesFC = topojson.feature(topo, topo.objects.states);
+      countiesFC.features.forEach((f) => {
+        f.properties = f.properties || {};
+        f.properties.fips = f.id;
+      });
+      countyGeoJSON.current = countiesFC;
+      statesGeoJSON.current = statesFC;
+      addAllLayers(map);
+    });
+
+    return () => {
+      map.remove();
+      mapRef.current = null;
+      onMapReady?.(null);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Sync bin markers with the `bins` prop (append-only reveal animation).
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const current = markersRef.current;
+    const nextIds = new Set(bins.map((b) => b.id));
+
+    // Remove markers no longer present (e.g. a fresh search cleared the old set).
+    current.forEach((marker, id) => {
+      if (!nextIds.has(id)) {
+        marker.remove();
+        current.delete(id);
+      }
+    });
+
+    // Add any newly revealed bins.
+    bins.forEach((bin) => {
+      if (current.has(bin.id)) return;
+      const el = document.createElement("div");
+      el.className = "bin-marker";
+      const marker = new maplibregl.Marker({ element: el })
+        .setLngLat([bin.lng, bin.lat])
+        .setPopup(
+          new maplibregl.Popup({ closeButton: false, offset: 12 }).setHTML(
+            `<div class="popup-title">Detected storage site</div>
+             <div class="popup-row"><span>Est. capacity</span><span class="mono">${bin.capacityBushels.toLocaleString()} bu</span></div>
+             <div class="popup-row"><span>Confidence</span><span class="mono">${Math.round(bin.confidence * 100)}%</span></div>`,
+          ),
+        )
+        .addTo(map);
+      current.set(bin.id, marker);
+    });
+  }, [bins]);
+
   function addAllLayers(map) {
     if (map.getSource("counties")) return;
 
@@ -211,33 +298,7 @@ function MapCanvas({
     //   },
     // });
 
-    // USDA NASS Cropland Data Layer tiles from Earth Engine, inserted
-    // BELOW the county fill/outline/label layers (but above the satellite
-    // base) so the boundaries and names stay legible on top of the crop
-    // tiles instead of being buried under them.
-    fetch("/api/cdl-tiles")
-      .then((res) => res.json())
-      .then((data) => {
-        if (!data.urlFormat) return;
-        map.addSource("nass-cdl", {
-          type: "raster",
-          tiles: [data.urlFormat],
-          tileSize: 256,
-          attribution: "USDA NASS CDL / Google Earth Engine",
-        });
-        map.addLayer(
-          {
-            id: "nass-cdl-layer",
-            type: "raster",
-            source: "nass-cdl",
-            layout: {},
-            maxzoom: 12.3,
-            paint: { "raster-opacity": 0.75 },
-          },
-          "state-labels",
-        );
-      })
-      .catch((err) => console.error("Failed to load CDL tiles:", err));
+    applyCdlTiles(map);
 
     map.on("mouseenter", "county-fill", () => {
       map.getCanvas().style.cursor = "pointer";
@@ -321,6 +382,12 @@ function MapCanvas({
         scanBtn.textContent = "Stop scan";
         searchCircleRef.current?.startSweep();
 
+        applyCdlTiles(map, {
+          lat: e.lngLat.lat,
+          lng: e.lngLat.lng,
+          radiusMiles: 3,
+        });
+
         try {
           const bins = await onScanRequest?.({
             lat: e.lngLat.lat,
@@ -362,95 +429,44 @@ function MapCanvas({
 
       searchCircleRef.current?.remove();
       searchCircleRef.current = createSearchCircle(map, e.lngLat, 3);
+
+      
     });
   }
 
-  // Init map once.
-  useEffect(() => {
-    if (!containerRef.current || mapRef.current) return;
-    const map = new maplibregl.Map({
-      container: containerRef.current,
-      style: SAT_STYLE,
-      center: initialCenter
-        ? [initialCenter.lng, initialCenter.lat]
-        : [-95.5, 40.5],
-      zoom: initialZoom ?? 4.2,
-      attributionControl: true,
-    });
-    map.addControl(
-      new maplibregl.NavigationControl({ showCompass: false }),
-      "bottom-right",
-    );
-    mapRef.current = map;
-    const updateZoom = () => setZoom(map.getZoom());
-    map.on("zoom", updateZoom);
-    updateZoom();
+  // add near the top of the component, above addAllLayers
+  function applyCdlTiles(map, params) {
+    const qs = params
+      ? `?lat=${params.lat}&lng=${params.lng}&radiusMiles=${params.radiusMiles}`
+      : "";
 
-    // Hand the API straight to the parent as soon as the map instance
-    // exists — a plain callback prop, not a forwarded ref, so this always
-    // fires regardless of how MapCanvas itself was loaded/mounted.
-    onMapReady?.({
-      flyTo(lat, lng, zoom = 9) {
-        mapRef.current?.flyTo({ center: [lng, lat], zoom, duration: 1400 });
-      },
-    });
-
-    map.on("load", async () => {
-      const topo = await fetch(
-        "https://unpkg.com/us-atlas@3/counties-10m.json",
-      ).then((r) => r.json());
-      const countiesFC = topojson.feature(topo, topo.objects.counties);
-      const statesFC = topojson.feature(topo, topo.objects.states);
-      countiesFC.features.forEach((f) => {
-        f.properties = f.properties || {};
-        f.properties.fips = f.id;
-      });
-      countyGeoJSON.current = countiesFC;
-      statesGeoJSON.current = statesFC;
-      addAllLayers(map);
-    });
-
-    return () => {
-      map.remove();
-      mapRef.current = null;
-      onMapReady?.(null);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Sync bin markers with the `bins` prop (append-only reveal animation).
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-    const current = markersRef.current;
-    const nextIds = new Set(bins.map((b) => b.id));
-
-    // Remove markers no longer present (e.g. a fresh search cleared the old set).
-    current.forEach((marker, id) => {
-      if (!nextIds.has(id)) {
-        marker.remove();
-        current.delete(id);
-      }
-    });
-
-    // Add any newly revealed bins.
-    bins.forEach((bin) => {
-      if (current.has(bin.id)) return;
-      const el = document.createElement("div");
-      el.className = "bin-marker";
-      const marker = new maplibregl.Marker({ element: el })
-        .setLngLat([bin.lng, bin.lat])
-        .setPopup(
-          new maplibregl.Popup({ closeButton: false, offset: 12 }).setHTML(
-            `<div class="popup-title">Detected storage site</div>
-             <div class="popup-row"><span>Est. capacity</span><span class="mono">${bin.capacityBushels.toLocaleString()} bu</span></div>
-             <div class="popup-row"><span>Confidence</span><span class="mono">${Math.round(bin.confidence * 100)}%</span></div>`,
-          ),
-        )
-        .addTo(map);
-      current.set(bin.id, marker);
-    });
-  }, [bins]);
+    fetch(`/api/cdl-tiles${qs}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (!data.urlFormat) return;
+        const existing = map.getSource("nass-cdl");
+        if (existing) {
+          existing.setTiles([data.urlFormat]); // swaps tiles in place, no re-add
+        } else {
+          map.addSource("nass-cdl", {
+            type: "raster",
+            tiles: [data.urlFormat],
+            tileSize: 256,
+            attribution: "USDA NASS CDL / Google Earth Engine",
+          });
+          map.addLayer(
+            {
+              id: "nass-cdl-layer",
+              type: "raster",
+              source: "nass-cdl",
+              paint: { "raster-opacity": 0.75 },
+            },
+            "state-labels",
+          );
+        }
+      })
+      .catch((err) => console.error("Failed to load CDL tiles:", err));
+  }
 
   return (
     <>
