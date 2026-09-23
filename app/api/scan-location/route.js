@@ -9,7 +9,8 @@ const MILES_TO_KM = 1.60934;
 const KM_PER_DEG_LAT = 110.574; // ~constant everywhere
 
 const DEFAULT_BOX_MILES = 6;
-const MAX_CHIPS = 5; // hard cap on Roboflow calls per scan, regardless of hits
+const TARGET_BINS = 5; // keep sending chips until we've found this many real bins...
+const MAX_CANDIDATES_SAFETY = 40; // ...or run out of candidates, or hit this hard safety ceiling
 
 function bboxAroundPoint(lon, lat, boxMiles) {
   const kmPerDegLon = 111.32 * Math.cos((lat * Math.PI) / 180);
@@ -63,12 +64,13 @@ export async function POST(req) {
     ),
   );
 
-  // 3. scan candidates ONE AT A TIME, up to MAX_CHIPS total -- this caps
-  //    how many Roboflow calls a single scan can ever make, regardless of
-  //    how many candidates were found or how many turn out to be bins.
-  const chipsToScan = candidates.slice(0, MAX_CHIPS);
+  // 3. scan candidates ONE AT A TIME -- keep sending chips to Roboflow
+  //    until we've actually found TARGET_BINS real bins, the client stops
+  //    the scan, or we run out of candidates (bounded by a safety ceiling
+  //    so a scan can never run away indefinitely).
+  const chipsToScan = candidates.slice(0, MAX_CANDIDATES_SAFETY);
   console.log(
-    `[scan] step 4/4: sending ${chipsToScan.length} of ${candidates.length} candidates to Roboflow (cap=${MAX_CHIPS})`,
+    `[scan] step 4/4: scanning up to ${chipsToScan.length} of ${candidates.length} candidates, stopping at ${TARGET_BINS} found bins`,
   );
 
   const bins = [];
@@ -77,6 +79,12 @@ export async function POST(req) {
   for (const candidate of chipsToScan) {
     if (req.signal.aborted) {
       console.log("[scan] client aborted — stopping before further chips");
+      break;
+    }
+    if (bins.length >= TARGET_BINS) {
+      console.log(
+        `[scan] target of ${TARGET_BINS} bins reached — stopping, not sending further chips`,
+      );
       break;
     }
     candidatesScanned++;
@@ -95,11 +103,24 @@ export async function POST(req) {
         `[scan]   [${label}] Roboflow responded: ${predictions.length} prediction(s) (${Date.now() - rfStart}ms)`,
       );
 
+      // We only care about actual grain bins -- sheds and other
+      // lookalike structures the model sometimes tags get dropped here
+      // before anything else touches this chip's predictions.
+      const binPredictions = predictions.filter(
+        (p) => !/shed/i.test(p.class ?? p.class_name ?? ""),
+      );
+      const shedCount = predictions.length - binPredictions.length;
+      if (shedCount > 0) {
+        console.log(
+          `[scan]   [${label}] ignoring ${shedCount} shed detection(s)`,
+        );
+      }
+
       // one marker per CHIP, not per prediction -- if Roboflow found
       // multiple bins in the same chip, we still only place one marker
       // at this candidate's location, using the highest-confidence hit.
-      if (predictions.length > 0) {
-        const best = predictions.reduce((a, b) =>
+      if (binPredictions.length > 0) {
+        const best = binPredictions.reduce((a, b) =>
           (b.confidence ?? 0) > (a.confidence ?? 0) ? b : a,
         );
 
@@ -114,7 +135,7 @@ export async function POST(req) {
             centerLat: candidate.lat,
           }),
           buildingCount: candidate.buildingCount,
-          detectionCount: predictions.length, // how many bins Roboflow actually found in this chip
+          detectionCount: binPredictions.length, // how many bins Roboflow actually found in this chip
         });
       }
     } catch (err) {
@@ -123,14 +144,23 @@ export async function POST(req) {
     }
   }
 
+  // If we stopped because we hit the target and there were still
+  // unscanned candidates left, there are very likely more bins out there
+  // than the ones we're returning -- the UI uses this to say "5+ bins
+  // found" and offer the rest as a Pro upgrade instead of implying the
+  // scan is complete.
+  const moreAvailable =
+    bins.length >= TARGET_BINS && candidatesScanned < candidates.length;
+
   console.log(
-    `[scan] complete: ${candidatesScanned} chip(s) sent, ${bins.length} bin(s) returned`,
+    `[scan] complete: ${candidatesScanned} chip(s) sent, ${bins.length} bin(s) returned, moreAvailable=${moreAvailable}`,
   );
 
   return NextResponse.json({
     area: { lat, lng: lon, boxMiles: box },
     candidatesFound: candidates.length,
     candidatesScanned,
+    moreAvailable,
     bins,
   });
 }
