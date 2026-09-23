@@ -473,6 +473,6 @@ body {
   40%, 60% { transform: translateX(4px); }
 }
 
-.stop-scan-btn.shake {
+.popup-scan-btn.shake {
   animation: shake-x 0.4s ease-in-out;
 }

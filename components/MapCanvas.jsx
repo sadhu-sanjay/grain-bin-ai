@@ -69,6 +69,8 @@ function MapCanvas({
   const selectedIdRef = useRef(null);
   const popupRef = useRef(null);
   const searchCircleRef = useRef(null);
+  const isScanningRef = useRef(false);
+  const activeScanBtnRef = useRef(null);
 
   const [zoom, setZoom] = useState(initialZoom ?? 4.2);
 
@@ -337,6 +339,10 @@ function MapCanvas({
     });
 
     map.on("click", "county-fill", (e) => {
+      if (isScanningRef.current) {
+        shakeStopButton();
+        return;
+      }
       const f = e.features?.[0];
       if (!f) return;
 
@@ -375,10 +381,16 @@ function MapCanvas({
       scanBtn.addEventListener("click", async () => {
         if (scanning) {
           onStopScan?.();
+          scanning = false;
+          isScanningRef.current = false;
+          activeScanBtnRef.current = null;
+          searchCircleRef.current?.stopSweep();
           return;
         }
 
         scanning = true;
+        isScanningRef.current = true;
+        activeScanBtnRef.current = scanBtn;
         scanBtn.textContent = "Stop scan";
         searchCircleRef.current?.startSweep();
 
@@ -406,13 +418,18 @@ function MapCanvas({
           }
         } finally {
           scanning = false;
+          isScanningRef.current = false;
+          activeScanBtnRef.current = null;
           searchCircleRef.current?.stopSweep();
         }
       });
       popupNode.appendChild(scanBtn);
 
       popupRef.current?.remove();
-      popupRef.current = new maplibregl.Popup({ closeButton: false })
+      popupRef.current = new maplibregl.Popup({
+        closeButton: false,
+        closeOnClick: false,
+      })
         .setLngLat(e.lngLat)
         .setDOMContent(popupNode)
         .addTo(map);
@@ -429,9 +446,28 @@ function MapCanvas({
 
       searchCircleRef.current?.remove();
       searchCircleRef.current = createSearchCircle(map, e.lngLat, 3);
-
-      
     });
+
+    map.on("click", (e) => {
+      if (isScanningRef.current) {
+        shakeStopButton();
+        return;
+      }
+      const hits = map.queryRenderedFeatures(e.point, {
+        layers: ["county-fill"],
+      });
+      if (hits.length === 0) {
+        popupRef.current?.remove();
+      }
+    });
+  }
+
+  function shakeStopButton() {
+    const btn = activeScanBtnRef.current;
+    if (!btn) return;
+    btn.classList.remove("shake");
+    void btn.offsetWidth; // force reflow so it can replay if already mid-shake
+    btn.classList.add("shake");
   }
 
   // add near the top of the component, above addAllLayers
