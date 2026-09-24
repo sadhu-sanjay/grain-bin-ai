@@ -195,6 +195,16 @@ function MapCanvas({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  function forwardScrollZoom(map, popup) {
+    popup.on("open", () => {
+      const el = popup.getElement();
+      if (!el) return;
+      el.addEventListener("wheel", (e) => map.scrollZoom.wheel(e), {
+        passive: true,
+      });
+    });
+  }
+
   // Sync bin markers with the `bins` prop (append-only reveal animation).
   useEffect(() => {
     const map = mapRef.current;
@@ -222,12 +232,15 @@ function MapCanvas({
         closeButton: false,
         offset: 14,
       }).setHTML(binPopupHTML(bin));
+      forwardScrollZoom(map, popup);
       const marker = new maplibregl.Marker({ element: el })
         .setLngLat([bin.lng, bin.lat])
         .setPopup(popup)
         .addTo(map);
 
-      el.addEventListener("click", () => {
+      el.addEventListener("click", (e) => {
+        e.stopPropagation();
+        popupRef.current?.remove(); // close any lingering "Scan this area" popup
         map.getSource("bin-detections")?.setData(detectionFeatures(bin));
       });
 
@@ -390,36 +403,36 @@ function MapCanvas({
     });
 
     // County name labels, readable over the satellite/crop tiles underneath.
-    // map.addLayer({
-    //   id: "county-labels",
-    //   type: "symbol",
-    //   source: "counties",
-    //   minzoom: 6.5,
-    //   layout: {
-    //     "text-field": ["get", "name"],
-    //     "text-font": ["Open Sans Regular"],
-    //     "text-size": [
-    //       "interpolate",
-    //       ["linear"],
-    //       ["zoom"],
-    //       5,
-    //       9,
-    //       7,
-    //       11,
-    //       9,
-    //       13,
-    //       12,
-    //       16,
-    //     ],
-    //     "text-allow-overlap": false,
-    //   },
-    //   paint: {
-    //     "text-color": "#f4efe3",
-    //     "text-halo-color": "#000000",
-    //     "text-halo-width": 1.4,
-    //     "text-halo-blur": 0.4,
-    //   },
-    // });
+    map.addLayer({
+      id: "county-labels",
+      type: "symbol",
+      source: "counties",
+      minzoom: 6.5,
+      layout: {
+        "text-field": ["get", "name"],
+        "text-font": ["Open Sans Regular"],
+        "text-size": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          5,
+          9,
+          7,
+          11,
+          9,
+          13,
+          12,
+          16,
+        ],
+        "text-allow-overlap": false,
+      },
+      paint: {
+        "text-color": "#f4efe3",
+        "text-halo-color": "#000000",
+        "text-halo-width": 1.4,
+        "text-halo-blur": 0.4,
+      },
+    });
 
     applyCdlTiles(map);
 
@@ -518,7 +531,7 @@ function MapCanvas({
         applyCdlTiles(map, {
           lat: e.lngLat.lat,
           lng: e.lngLat.lng,
-          radiusMiles: 3,
+          radiusMiles: 18,
         });
 
         try {
@@ -554,6 +567,7 @@ function MapCanvas({
         .setLngLat(e.lngLat)
         .setDOMContent(popupNode)
         .addTo(map);
+      forwardScrollZoom(map, popupRef.current);
 
       onCountyClick?.({
         fips: f.properties.fips,
@@ -566,7 +580,7 @@ function MapCanvas({
       });
 
       searchCircleRef.current?.remove();
-      searchCircleRef.current = createSearchCircle(map, e.lngLat, 3);
+      searchCircleRef.current = createSearchCircle(map, e.lngLat, 18);
     });
 
     map.on("click", (e) => {

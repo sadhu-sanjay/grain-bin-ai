@@ -5,20 +5,21 @@ import { useEffect, useRef, useState } from "react";
 import ResultsPanel from "@/components/ResultsPanel";
 import TopBar from "@/components/TopBar";
 import CropLegend from "@/components/CropLegend";
+import seedScan from "@/data/seed-scan.json";
 
 // MapLibre touches `window`, so the map must be client-only, loaded with no SSR.
 const MapCanvas = dynamic(() => import("@/components/MapCanvas"), {
   ssr: false,
 });
 
-// Pre-loaded on first visit so a new user sees real results immediately,
-// with no search required. Casselton, ND — a real grain-elevator town in
-// Cass County, ND, so the map zooms straight to an actual place instead of
-// an empty county centroid, and the detected bins drop in right around it.
+import seedScan from "@/data/seed-scan.json";
+
+// Starting position now comes directly from the shipped scan result,
+// not a hardcoded location.
 const DEFAULT_AREA = {
-  label: "Casselton, ND",
-  lat: 46.8996,
-  lng: -97.2136,
+  label: "Scanned area",
+  lat: seedScan.area.lat,
+  lng: seedScan.area.lng,
   radiusMiles: 25,
 };
 
@@ -34,7 +35,6 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [hoveredCounty, setHoveredCounty] = useState(null);
   const [hitTarget, setHitTarget] = useState(false);
-  
 
   // Fires the moment a county is clicked, so the circle appears right
   // alongside the popup -- before Scan is even pressed.
@@ -76,31 +76,12 @@ export default function Home() {
     scanControllerRef.current?.abort();
   }
 
-  async function runDetection(nextArea, flyTo = true) {
-    setLoading(true);
-    setRevealedBins([]);
-    setAllBins([]);
-    setArea(nextArea);
-
-    if (flyTo) mapRef.current?.flyTo(nextArea.lat, nextArea.lng, 9);
-
-    try {
-      const res = await fetch("/api/detect-bins", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(nextArea),
-      });
-      const data = await res.json();
-      setAllBins(data.bins);
-    } finally {
-      setLoading(false);
-    }
-  }
 
   // Auto-run detection on the default area the moment the app loads —
   // this is a real (mocked) detection call, not hard-coded pins.
   useEffect(() => {
-    runDetection(DEFAULT_AREA, false);
+    setArea(DEFAULT_AREA);
+    setAllBins(seedScan.bins ?? []);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -118,7 +99,8 @@ export default function Home() {
   }, [allBins]);
 
   function handleSearch(lat, lng, label) {
-    runDetection({ label, lat, lng, radiusMiles: 25 });
+    setArea({ label, lat, lng, radiusMiles: 25 });
+    mapRef.current?.flyTo(lat, lng, 9);
   }
 
   function handleResultClick(bin) {

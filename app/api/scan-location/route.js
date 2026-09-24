@@ -5,13 +5,17 @@ import { getNaipChipUrl } from "@/lib/naipChip";
 import { detectBinsInChip } from "@/lib/roboflowDetect";
 import { estimateCapacityBushels } from "@/lib/estimateCapacity";
 import { pixelBoxToGeoBox } from "@/lib/pixelToGeo";
+import { writeFile, mkdir } from "fs/promises";
+import path from "path";
 
 const MILES_TO_KM = 1.60934;
 const KM_PER_DEG_LAT = 110.574; // ~constant everywhere
 
 const DEFAULT_BOX_MILES = 6;
-const TARGET_BINS = 3; // keep scanning candidates until we have at least this many
-const MAX_CANDIDATES_TO_SCAN = 25; // hard safety ceiling on Roboflow calls per scan
+// const TARGET_BINS = 3; // keep scanning candidates until we have at least this many
+// const MAX_CANDIDATES_TO_SCAN = 25; // hard safety ceiling on Roboflow calls per scan
+const TARGET_BINS = 10; // was 5
+const MAX_CANDIDATES_TO_SCAN = 40; // raised alongside it so hitting 10 is actually reachable
 
 function bboxAroundPoint(lon, lat, boxMiles) {
   const kmPerDegLon = 111.32 * Math.cos((lat * Math.PI) / 180);
@@ -154,11 +158,28 @@ export async function POST(req) {
     `[scan] complete: ${candidatesScanned} chip(s) sent, ${bins.length} bin(s) returned, hitTarget=${hitTarget}`,
   );
 
-  return NextResponse.json({
+  const resultPayload = {
+    scannedAt: new Date().toISOString(),
     area: { lat, lng: lon, boxMiles: box },
     candidatesFound: candidates.length,
     candidatesScanned,
     bins,
     hitTarget,
-  });
+  };
+
+  try {
+    const outDir = path.join(process.cwd(), "data", "scans");
+    await mkdir(outDir, { recursive: true });
+    const filename = `scan-${Date.now()}.json`;
+    await writeFile(
+      path.join(outDir, filename),
+      JSON.stringify(resultPayload, null, 2),
+    );
+    console.log(`[scan] saved results to data/scans/${filename}`);
+  } catch (err) {
+    // saving is a nice-to-have -- never fail the actual scan response over it
+    console.error("[scan] failed to save results JSON:", err);
+  }
+
+  return NextResponse.json(resultPayload);
 }
