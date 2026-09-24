@@ -8,16 +8,29 @@ import { stateAbbrFromFips } from "@/lib/stateFips";
 import circle from "@turf/circle";
 import destination from "@turf/destination";
 import bbox from "@turf/bbox";
-import { getConfidenceTier } from "@/lib/confidence";
 
-// A small grain-bin/silo pictogram used for both the map markers and the
-// popup, in place of a plain dot — dome roof + cylindrical body.
-const BIN_ICON_SVG = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <path d="M12 2 L19 7 V19 A7 4 0 0 1 5 19 V7 Z" fill="currentColor" fill-opacity="0.18" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
-  <path d="M5 7 A7 4 0 0 0 19 7" fill="none" stroke="currentColor" stroke-width="1.5"/>
-  <path d="M5.6 12 H18.4" stroke="currentColor" stroke-width="1" stroke-opacity="0.6"/>
-  <path d="M6.3 16 H17.7" stroke="currentColor" stroke-width="1" stroke-opacity="0.6"/>
-</svg>`;
+function detectionFeatures(bin) {
+  return {
+    type: "FeatureCollection",
+    features: bin.detections.map((d) => ({
+      type: "Feature",
+      properties: { confidence: d.confidence ?? 0, primary: d.primary },
+      geometry: {
+        type: "Polygon",
+        coordinates: [
+          [
+            [d.bounds.west, d.bounds.north],
+            [d.bounds.east, d.bounds.north],
+            [d.bounds.east, d.bounds.south],
+            [d.bounds.west, d.bounds.south],
+            [d.bounds.west, d.bounds.north],
+          ],
+        ],
+      },
+    })),
+  };
+}
+const EMPTY_FC = { type: "FeatureCollection", features: [] };
 
 function createSearchCircle(map, lngLat, radiusMiles) {
   const wrapper = document.createElement("div");
@@ -59,9 +72,44 @@ function createSearchCircle(map, lngLat, radiusMiles) {
   };
 }
 
+function confidenceTier(c) {
+  if (c >= 0.8) return "high";
+  if (c >= 0.6) return "medium";
+  return "low";
+}
+
+function confidenceBadgeHTML(confidence) {
+  const pct = Math.round((confidence ?? 0) * 100);
+  return `<span class="confidence-badge ${confidenceTier(confidence ?? 0)}">${pct}%</span>`;
+}
+
+// Lightweight info card -- used for every marker's default popup, no
+// image load, so revealing dozens of markers stays cheap.
+function binPopupHTML(bin) {
+  return `
+    <div class="popup-title">Detected storage site</div>
+    <div class="popup-row"><span>Est. capacity</span><span class="mono">${bin.capacityBushels.toLocaleString()} bu</span></div>
+    <div class="popup-row"><span>Confidence</span>${confidenceBadgeHTML(bin.confidence)}</div>
+    <button type="button" class="upgrade-owner-btn" title="Upgrade to Pro to unlock owner information">🔒 Upgrade to Pro for owner info</button>
+  `;
+}
+
+const BIN_ICON_SVG = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <path d="M12 2 L19 7 V19 A7 4 0 0 1 5 19 V7 Z" fill="currentColor" fill-opacity="0.18" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+  <path d="M5 7 A7 4 0 0 0 19 7" fill="none" stroke="currentColor" stroke-width="1.5"/>
+  <path d="M5.6 12 H18.4" stroke="currentColor" stroke-width="1" stroke-opacity="0.6"/>
+  <path d="M6.3 16 H17.7" stroke="currentColor" stroke-width="1" stroke-opacity="0.6"/>
+</svg>`;
+
+function binMarkerIcon(confidence) {
+  const el = document.createElement("div");
+  el.className = `bin-marker ${confidenceTier(confidence ?? 0)}`;
+  el.innerHTML = BIN_ICON_SVG;
+  return el;
+}
+
 function MapCanvas({
   bins,
-  selectedBinId,
   onCountyHover,
   onCountyClick,
   onScanRequest,
@@ -76,14 +124,13 @@ function MapCanvas({
   const countyGeoJSON = useRef(null);
   const statesGeoJSON = useRef(null);
   const markersRef = useRef(new Map());
+  const binsRef = useRef([]);
   const hoveredIdRef = useRef(null);
   const selectedIdRef = useRef(null);
   const popupRef = useRef(null);
   const searchCircleRef = useRef(null);
   const isScanningRef = useRef(false);
   const activeScanBtnRef = useRef(null);
-  const selectedBinMarkerElRef = useRef(null);
-  const annotationMarkerRef = useRef(null);
 
   const [zoom, setZoom] = useState(initialZoom ?? 4.2);
 
@@ -115,6 +162,14 @@ function MapCanvas({
       flyTo(lat, lng, zoom = 9) {
         mapRef.current?.flyTo({ center: [lng, lat], zoom, duration: 1400 });
       },
+      selectBin(bin, zoom = 17.4) {
+        const map = mapRef.current;
+        if (!map) return;
+        map.flyTo({ center: [bin.lng, bin.lat], zoom, duration: 1400 });
+        map.getSource("bin-detections")?.setData(detectionFeatures(bin));
+        const marker = markersRef.current.get(bin.id);
+        if (marker && !marker.getPopup().isOpen()) marker.togglePopup();
+      },
     });
 
     map.on("load", async () => {
@@ -144,6 +199,10 @@ function MapCanvas({
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
+    binsRef.current = bins;
+    if (bins.length === 0) {
+      map.getSource("bin-detections")?.setData(EMPTY_FC);
+    }
     const current = markersRef.current;
     const nextIds = new Set(bins.map((b) => b.id));
 
@@ -158,75 +217,73 @@ function MapCanvas({
     // Add any newly revealed bins.
     bins.forEach((bin) => {
       if (current.has(bin.id)) return;
-      const tier = getConfidenceTier(bin.confidence);
-      const el = document.createElement("div");
-      el.className = `bin-marker conf-${tier.key}`;
-      el.style.setProperty("--conf-color", tier.color);
-      el.innerHTML = BIN_ICON_SVG;
-      const pct = Math.round((bin.confidence ?? 0) * 100);
+      const el = binMarkerIcon(bin.confidence);
+      const popup = new maplibregl.Popup({
+        closeButton: false,
+        offset: 14,
+      }).setHTML(binPopupHTML(bin));
       const marker = new maplibregl.Marker({ element: el })
         .setLngLat([bin.lng, bin.lat])
-        .setPopup(
-          new maplibregl.Popup({ closeButton: false, offset: 16 }).setHTML(
-            `<div class="popup-modern">
-               <div class="popup-head">
-                 <span class="popup-bin-icon">${BIN_ICON_SVG}</span>
-                 <span class="popup-title">Detected storage site</span>
-               </div>
-               <div class="popup-row"><span>Est. capacity</span><span class="mono">${bin.capacityBushels.toLocaleString()} bu</span></div>
-               <div class="popup-row popup-row-conf">
-                 <span>Confidence</span>
-                 <span class="popup-conf-pill conf-${tier.key}" style="--conf-color:${tier.color}">${pct}%</span>
-               </div>
-               <div class="popup-owner-cta">🔒 Upgrade to Pro for owner info</div>
-             </div>`,
-          ),
-        )
+        .setPopup(popup)
         .addTo(map);
+
+      el.addEventListener("click", () => {
+        map.getSource("bin-detections")?.setData(detectionFeatures(bin));
+      });
+
       current.set(bin.id, marker);
     });
   }, [bins]);
 
-  // Highlight + annotate the selected bin: a pulsing ring on its marker
-  // plus a floating confidence pill hovering above it.
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-
-    if (selectedBinMarkerElRef.current) {
-      selectedBinMarkerElRef.current.classList.remove("bin-marker-selected");
-      selectedBinMarkerElRef.current = null;
-    }
-    annotationMarkerRef.current?.remove();
-    annotationMarkerRef.current = null;
-
-    if (!selectedBinId) return;
-    const marker = markersRef.current.get(selectedBinId);
-    const bin = bins.find((b) => b.id === selectedBinId);
-    if (!marker || !bin) return;
-
-    const el = marker.getElement();
-    el.classList.add("bin-marker-selected");
-    selectedBinMarkerElRef.current = el;
-
-    const tier = getConfidenceTier(bin.confidence);
-    const pct = Math.round((bin.confidence ?? 0) * 100);
-    const annotationEl = document.createElement("div");
-    annotationEl.className = "bin-annotation";
-    annotationEl.style.setProperty("--conf-color", tier.color);
-    annotationEl.innerHTML = `<span class="bin-annotation-dot"></span>${pct}% confidence`;
-
-    annotationMarkerRef.current = new maplibregl.Marker({
-      element: annotationEl,
-      anchor: "bottom",
-      offset: [0, -26],
-    })
-      .setLngLat([bin.lng, bin.lat])
-      .addTo(map);
-  }, [selectedBinId, bins]);
-
   function addAllLayers(map) {
     if (map.getSource("counties")) return;
+
+    map.addSource("bin-detections", {
+      type: "geojson",
+      data: { type: "FeatureCollection", features: [] },
+    });
+
+    map.addLayer({
+      id: "bin-detections-fill",
+      type: "fill",
+      source: "bin-detections",
+      paint: {
+        "fill-color": ["case", ["get", "primary"], "#c9a227", "#e0362f"],
+        "fill-opacity": 0.22,
+      },
+    });
+
+    map.addLayer({
+      id: "bin-detections-outline",
+      type: "line",
+      source: "bin-detections",
+      paint: {
+        "line-color": ["case", ["get", "primary"], "#c9a227", "#e0362f"],
+        "line-width": 2,
+      },
+    });
+
+    map.addLayer({
+      id: "bin-detections-label",
+      type: "symbol",
+      source: "bin-detections",
+      layout: {
+        "text-field": [
+          "concat",
+          ["to-string", ["round", ["*", ["get", "confidence"], 100]]],
+          "%",
+        ],
+        "text-font": ["Open Sans Bold"],
+        "text-size": 11,
+        "text-offset": [0, -1.1],
+        "text-allow-overlap": true,
+      },
+      paint: {
+        "text-color": ["case", ["get", "primary"], "#c9a227", "#e0362f"],
+        "text-halo-color": "#000",
+        "text-halo-width": 1.4,
+      },
+    });
 
     // Every US county, all the time — no fake per-county data, no subset.
     // `promoteId` turns each feature's `fips` property into its GeoJSON

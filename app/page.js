@@ -33,8 +33,7 @@ export default function Home() {
   const [revealedBins, setRevealedBins] = useState([]);
   const [loading, setLoading] = useState(false);
   const [hoveredCounty, setHoveredCounty] = useState(null);
-  const [selectedBinId, setSelectedBinId] = useState(null);
-  const [moreAvailable, setMoreAvailable] = useState(false);
+  const [hitTarget, setHitTarget] = useState(false);
   
 
   // Fires the moment a county is clicked, so the circle appears right
@@ -49,8 +48,7 @@ export default function Home() {
     setLoading(true);
     setRevealedBins([]);
     setAllBins([]);
-    setSelectedBinId(null);
-    setMoreAvailable(false);
+    setHitTarget(false);
     setArea({ label: `${name} County, ${state}`, lat, lng, radiusMiles: 3 });
 
     const controller = new AbortController();
@@ -66,7 +64,7 @@ export default function Home() {
       const data = await res.json();
       const bins = data.bins ?? [];
       setAllBins(bins);
-      setMoreAvailable(!!data.moreAvailable);
+      setHitTarget(Boolean(data.hitTarget));
       return bins;
     } finally {
       setLoading(false);
@@ -82,8 +80,6 @@ export default function Home() {
     setLoading(true);
     setRevealedBins([]);
     setAllBins([]);
-    setSelectedBinId(null);
-    setMoreAvailable(false);
     setArea(nextArea);
 
     if (flyTo) mapRef.current?.flyTo(nextArea.lat, nextArea.lng, 9);
@@ -95,9 +91,7 @@ export default function Home() {
         body: JSON.stringify(nextArea),
       });
       const data = await res.json();
-      const bins = data.bins ?? [];
-      setAllBins(bins);
-      setMoreAvailable(bins.length > 5);
+      setAllBins(data.bins);
     } finally {
       setLoading(false);
     }
@@ -128,8 +122,7 @@ export default function Home() {
   }
 
   function handleResultClick(bin) {
-    setSelectedBinId(bin.id);
-    mapRef.current?.flyTo(bin.lat, bin.lng, 18.4);
+    mapRef.current?.selectBin(bin, 18.4);
   }
 
   return (
@@ -139,7 +132,6 @@ export default function Home() {
           mapRef.current = api;
         }}
         bins={revealedBins}
-        selectedBinId={selectedBinId}
         onCountyHover={setHoveredCounty}
         initialCenter={{ lat: DEFAULT_AREA.lat, lng: DEFAULT_AREA.lng }}
         initialZoom={9}
@@ -159,9 +151,8 @@ export default function Home() {
         area={area}
         revealedBins={revealedBins}
         totalBins={allBins.length}
-        moreAvailable={moreAvailable}
+        hitTarget={hitTarget}
         loading={loading}
-        selectedBinId={selectedBinId}
         onResultClick={handleResultClick}
       />
 
