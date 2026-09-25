@@ -591,3 +591,53 @@ body {
 .popup-scan-btn.shake {
   animation: shake-x 0.4s ease-in-out;
 }
+
+.bin-marker {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  width: auto;
+  padding: 4px 7px 4px 5px;
+  justify-content: flex-start;
+  /* keep your existing border-radius, border, box-shadow, and the
+     .high/.medium/.low background-color rules as they are */
+}
+.bin-marker-num {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--soil-900);
+  line-height: 1;
+}
+
+.popup-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.popup-close-btn {
+  background: none;
+  border: none;
+  color: var(--paper-500);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
+.popup-close-btn:hover {
+  color: var(--paper-100);
+}
+
+.site-info-panel {
+  position: absolute;
+  top: 64px;
+  left: 44px;
+  width: 321px;
+  overflow-y: auto;
+  background: var(--soil-900);
+  border: 1px solid var(--soil-700);
+  border-radius: 10px;
+  padding: 16px;
+  z-index: 5;
+}

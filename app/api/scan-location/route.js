@@ -26,144 +26,75 @@ function bboxAroundPoint(lon, lat, boxMiles) {
 export async function POST(req) {
   const body = await req.json();
   const { lat, lon, boxMiles } = body ?? {};
-
-  console.log(
-    `[scan] request received: lat=${lat} lon=${lon} boxMiles=${boxMiles ?? DEFAULT_BOX_MILES}`,
-  );
-
-  if (typeof lat !== "number" || typeof lon !== "number") {
-    console.log("[scan] rejected: lat/lon missing or not numbers");
-    return NextResponse.json(
-      { error: "lat and lon (numbers) are required" },
-      { status: 400 },
-    );
-  }
-
   const box = typeof boxMiles === "number" ? boxMiles : DEFAULT_BOX_MILES;
   const bbox = bboxAroundPoint(lon, lat, box);
-  console.log(
-    `[scan] step 1/4: bbox computed = [${bbox.map((n) => n.toFixed(5)).join(", ")}]`,
-  );
 
-  // 1. buildings inside the box -- Microsoft quadkey tile fetch, filtered to bbox
-  console.log("[scan] step 2/4: querying Microsoft buildings in bbox...");
-  const buildingsStart = Date.now();
-  const buildings = await getBuildingsInBbox(bbox, req.signal);
-  console.log(
-    `[scan] step 2/4 done: ${buildings.length} buildings found (${Date.now() - buildingsStart}ms)`,
-  );
+  const stream = new ReadableStream({
+    async start(controller) {
+      const encoder = new TextEncoder();
+      const emit = (event) =>
+        controller.enqueue(encoder.encode(JSON.stringify(event) + "\n"));
 
-  // 2. cluster into farmstead-scale candidates (3-15 buildings, 100m proximity)
-  console.log(
-    "[scan] step 3/4: clustering buildings (DBSCAN eps=100m, size 3-15)...",
-  );
-  const candidates = clusterFarmsteads(buildings, bbox);
-  console.log(
-    `[scan] step 3/4 done: ${candidates.length} farmstead candidates found`,
-  );
-  candidates.forEach((c, i) =>
-    console.log(
-      `  candidate ${i + 1}: lat=${c.lat.toFixed(5)} lon=${c.lon.toFixed(5)} buildings=${c.buildingCount}`,
-    ),
-  );
+      try {
+        emit({ type: "progress", stage: "buildings", status: "start" });
+        const t0 = Date.now();
+        const buildings = await getBuildingsInBbox(bbox, req.signal);
+        emit({ type: "progress", stage: "buildings", status: "done", count: buildings.length, ms: Date.now() - t0 });
 
-  // 3. scan candidates ONE AT A TIME until we hit TARGET_BINS results or
-  //    run out of candidates (or a hard safety ceiling) -- NOT a fixed
-  //    chip count. A candidate only counts toward the target if it
-  //    actually produced a bin; empty chips don't.
-  console.log(
-    `[scan] step 4/4: scanning up to ${Math.min(candidates.length, MAX_CANDIDATES_TO_SCAN)} of ${candidates.length} candidate(s), target ${TARGET_BINS} bin(s)`,
-  );
+        const t1 = Date.now();
+        const candidates = clusterFarmsteads(buildings, bbox);
+        emit({ type: "progress", stage: "clustering", status: "done", count: candidates.length, ms: Date.now() - t1 });
 
-  const bins = [];
-  let candidatesScanned = 0;
+        let candidatesScanned = 0;
+        const bins = [];
 
-  for (const candidate of candidates) {
-    if (bins.length >= TARGET_BINS) break;
-    if (candidatesScanned >= MAX_CANDIDATES_TO_SCAN) break;
-    if (req.signal.aborted) {
-      console.log("[scan] client aborted — stopping before further chips");
-      break;
-    }
+        for (const candidate of candidates) {
+          if (bins.length >= TARGET_BINS) break;
+          if (candidatesScanned >= MAX_CANDIDATES_TO_SCAN) break;
+          if (req.signal.aborted) break;
+          candidatesScanned++;
 
-    candidatesScanned++;
-    const label = `candidate ${candidatesScanned} (lat=${candidate.lat.toFixed(5)}, lon=${candidate.lon.toFixed(5)})`;
+          emit({ type: "progress", stage: "candidate", index: candidatesScanned, of: candidates.length, status: "chip-start" });
+          const tChip = Date.now();
+          const chip = await getNaipChipUrl(candidate.lon, candidate.lat);
+          emit({ type: "progress", stage: "candidate", index: candidatesScanned, status: "chip-done", ms: Date.now() - tChip });
 
-    try {
-      console.log(`[scan]   [${label}] fetching NAIP chip...`);
-      const chip = await getNaipChipUrl(candidate.lon, candidate.lat);
-      console.log(`[scan]   [${label}] chip ready: ${chip.url}`);
+          emit({ type: "progress", stage: "candidate", index: candidatesScanned, status: "roboflow-start" });
+          const tRf = Date.now();
+          const result = await detectBinsInChip(chip.url, req.signal);
+          const predictions = (result?.predictions ?? []).filter(
+            (p) => (p.class ?? "").toLowerCase() !== "shed",
+          );
+          emit({ type: "progress", stage: "candidate", index: candidatesScanned, status: "roboflow-done", ms: Date.now() - tRf, found: predictions.length > 0 });
 
-      console.log(`[scan]   [${label}] calling Roboflow...`);
-      const rfStart = Date.now();
-      const result = await detectBinsInChip(chip.url, req.signal);
-      const allPredictions = result?.predictions ?? [];
+          if (predictions.length > 0) {
+            const best = predictions.reduce((a, b) => (b.confidence ?? 0) > (a.confidence ?? 0) ? b : a);
+            const geoBoxFor = (p) => pixelBoxToGeoBox(p, chip.bounds, chip.chipSizeDeg, chip.dimensionsPx);
+            const bin = {
+              id: `${candidate.lat.toFixed(5)},${candidate.lon.toFixed(5)}`,
+              lat: candidate.lat,
+              lng: candidate.lon,
+              confidence: best.confidence ?? null,
+              capacityBushels: estimateCapacityBushels(best, { chipSizeDeg: chip.chipSizeDeg, dimensionsPx: chip.dimensionsPx, centerLat: candidate.lat }),
+              buildingCount: candidate.buildingCount,
+              detectionCount: predictions.length,
+              detections: [best, ...predictions.filter((p) => p !== best)].map((p, idx) => ({
+                bounds: geoBoxFor(p), confidence: p.confidence ?? null, primary: idx === 0,
+              })),
+            };
+            bins.push(bin);
+            emit({ type: "bin", bin }); // ← the actual "show it now" event
+          }
+        }
 
-      // The model also flags sheds -- those aren't storage capacity and
-      // shouldn't count as a result or show up in the list at all.
-      const predictions = allPredictions.filter(
-        (p) => (p.class ?? "").toLowerCase() !== "shed",
-      );
-      console.log(
-        `[scan]   [${label}] Roboflow responded: ${allPredictions.length} detection(s), ${predictions.length} after dropping sheds (${Date.now() - rfStart}ms)`,
-      );
-
-      // one marker per CHIP, not per prediction -- if Roboflow found
-      // multiple bins in the same chip, we still only place one marker
-      // at this candidate's location, using the highest-confidence hit.
-      // All non-shed boxes for the chip are kept on the bin too, so the
-      // annotated view can show every bin found there, not just the best.
-      if (predictions.length > 0) {
-        const best = predictions.reduce((a, b) =>
-          (b.confidence ?? 0) > (a.confidence ?? 0) ? b : a,
-        );
-
-        const geoBoxFor = (p) =>
-          pixelBoxToGeoBox(p, chip.bounds, chip.chipSizeDeg, chip.dimensionsPx);
-
-        bins.push({
-          id: `${candidate.lat.toFixed(5)},${candidate.lon.toFixed(5)}`,
-          lat: candidate.lat,
-          lng: candidate.lon,
-          confidence: best.confidence ?? null,
-          capacityBushels: estimateCapacityBushels(best, {
-            chipSizeDeg: chip.chipSizeDeg,
-            dimensionsPx: chip.dimensionsPx,
-            centerLat: candidate.lat,
-          }),
-          buildingCount: candidate.buildingCount,
-          detectionCount: predictions.length,
-          // real-world rectangles for every non-shed detection in this
-          // chip, best one first -- no image, no pixel coords needed
-          // downstream at all.
-          detections: [best, ...predictions.filter((p) => p !== best)].map(
-            (p, idx) => ({
-              bounds: geoBoxFor(p),
-              confidence: p.confidence ?? null,
-              primary: idx === 0,
-            }),
-          ),
-        });
+        emit({ type: "done", candidatesScanned, hitTarget: bins.length >= TARGET_BINS });
+      } catch (err) {
+        emit({ type: "error", message: String(err) });
+      } finally {
+        controller.close();
       }
-    } catch (err) {
-      // one bad chip/candidate shouldn't kill the whole scan -- log and move on
-      console.error(`[scan]   [${label}] FAILED:`, err);
-    }
-  }
+    },
+  });
 
-  const hitTarget = bins.length >= TARGET_BINS;
-  console.log(
-    `[scan] complete: ${candidatesScanned} chip(s) sent, ${bins.length} bin(s) returned, hitTarget=${hitTarget}`,
-  );
-
-  const resultPayload = {
-    scannedAt: new Date().toISOString(),
-    area: { lat, lng: lon, boxMiles: box },
-    candidatesFound: candidates.length,
-    candidatesScanned,
-    bins,
-    hitTarget,
-  };
-
-  return NextResponse.json(resultPayload);
+  return new Response(stream, { headers: { "Content-Type": "application/x-ndjson" } });
 }

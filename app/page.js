@@ -53,7 +53,7 @@ export default function Home() {
     if (seedPendingRef.current) {
       seedPendingRef.current = false;
       try {
-        await new Promise((r) => setTimeout(r, 1000)); // stand-in for real scan latency
+        await new Promise((r) => setTimeout(r, 3000)); // stand-in for real scan latency
         const bins = seedScan.bins ?? [];
         setAllBins(bins);
         setHitTarget(Boolean(seedScan.hitTarget));

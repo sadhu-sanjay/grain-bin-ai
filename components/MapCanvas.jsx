@@ -5,9 +5,9 @@ import maplibregl from "maplibre-gl";
 import * as topojson from "topojson-client";
 import { SAT_STYLE } from "@/lib/mapStyles";
 import { stateAbbrFromFips } from "@/lib/stateFips";
-import circle from "@turf/circle";
 import destination from "@turf/destination";
 import bbox from "@turf/bbox";
+import SiteInfoPanel from "./SiteInfoPanel";
 
 function detectionFeatures(bin) {
   return {
@@ -83,11 +83,19 @@ function confidenceBadgeHTML(confidence) {
   return `<span class="confidence-badge ${confidenceTier(confidence ?? 0)}">${pct}%</span>`;
 }
 
+// Shared close (×) button markup for both popup states below -- actual
+// closing is wired up in wireClosePopupButton() via event delegation, so
+// it keeps working even after setHTML() swaps this markup back in.
+const POPUP_CLOSE_BTN_HTML = `<button type="button" class="popup-close-btn" aria-label="Close">&times;</button>`;
+
 // Lightweight info card -- used for every marker's default popup, no
 // image load, so revealing dozens of markers stays cheap.
 function binPopupHTML(bin) {
   return `
-    <div class="popup-title">Detected storage site</div>
+    <div class="popup-title-row">
+      <div class="popup-title">Detected storage site</div>
+      ${POPUP_CLOSE_BTN_HTML}
+    </div>
     <div class="popup-row"><span>Est. capacity</span><span class="mono">${bin.capacityBushels.toLocaleString()} bu</span></div>
     <div class="popup-row"><span>Confidence</span>${confidenceBadgeHTML(bin.confidence)}</div>
     <button type="button" class="upgrade-owner-btn" title="Upgrade to Pro to unlock owner information">🔒 Upgrade to Pro for owner info</button>
@@ -101,10 +109,10 @@ const BIN_ICON_SVG = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none
   <path d="M6.3 16 H17.7" stroke="currentColor" stroke-width="1" stroke-opacity="0.6"/>
 </svg>`;
 
-function binMarkerIcon(confidence) {
+function binMarkerIcon(confidence, siteNum) {
   const el = document.createElement("div");
   el.className = `bin-marker ${confidenceTier(confidence ?? 0)}`;
-  el.innerHTML = BIN_ICON_SVG;
+  el.innerHTML = `${BIN_ICON_SVG}<span class="bin-marker-num">${siteNum}</span>`;
   return el;
 }
 
@@ -134,6 +142,7 @@ function MapCanvas({
   const activeScanBtnRef = useRef(null);
 
   const [zoom, setZoom] = useState(initialZoom ?? 4.2);
+  const [selectedBin, setSelectedBin] = useState(null);
 
   // Init map once.
   useEffect(() => {
@@ -248,27 +257,27 @@ function MapCanvas({
     });
   }
 
+  // Wires the in-popup "×" close button via event delegation on the
+  // popup's persistent wrapper element -- attached once, so it keeps
+  // working even after selectBin() swaps the inner HTML with setHTML().
+  function wireClosePopupButton(popup) {
+    popup.on("open", () => {
+      const el = popup.getElement();
+      if (!el || el.dataset.closeWired) return;
+      el.dataset.closeWired = "1";
+      el.addEventListener("click", (e) => {
+        if (e.target.closest(".popup-close-btn")) {
+          popup.remove();
+        }
+      });
+    });
+  }
+
   function selectBin(map, bin, zoom = 16.5) {
     const siteNum = Array.from(markersRef.current.keys()).indexOf(bin.id) + 1;
-
     map.flyTo({ center: [bin.lng, bin.lat], zoom, duration: 1400 });
     map.getSource("bin-detections")?.setData(detectionFeatures(bin));
-
-    const marker = markersRef.current.get(bin.id);
-    if (!marker) return;
-
-    const detailsHTML = `
-    <div class="popup-title">Site #${siteNum}</div>
-    <div class="popup-row"><span>Est. capacity</span><span class="mono">${bin.capacityBushels.toLocaleString()} bu</span></div>
-    <div class="popup-row"><span>Confidence</span>${confidenceBadgeHTML(bin.confidence)}</div>
-    <div class="popup-row"><span>Location</span><span class="mono">${bin.lat.toFixed(4)}°, ${bin.lng.toFixed(4)}°</span></div>
-    <div class="popup-row"><span>Detections</span><span class="mono">${bin.detectionCount} bin(s)</span></div>
-    <button type="button" class="upgrade-owner-btn" title="Upgrade to Pro to unlock owner information">🔒 Upgrade to Pro for owner info</button>
-  `;
-
-    const popup = marker.getPopup();
-    popup.setHTML(detailsHTML);
-    if (!popup.isOpen()) marker.togglePopup();
+    setSelectedBin({ ...bin, siteNum });
   }
 
   // Sync bin markers with the `bins` prop (append-only reveal animation).
@@ -293,15 +302,12 @@ function MapCanvas({
     // Add any newly revealed bins.
     bins.forEach((bin) => {
       if (current.has(bin.id)) return;
-      const el = binMarkerIcon(bin.confidence);
-      const popup = new maplibregl.Popup({
-        closeButton: false,
-        offset: 14,
-      }).setHTML(binPopupHTML(bin));
-      forwardScrollZoom(map, popup);
+      // Same numbering selectBin() computes later (position in insertion
+      // order) -- computed here too so the marker shows it immediately.
+      const siteNum = current.size + 1;
+      const el = binMarkerIcon(bin.confidence, siteNum);
       const marker = new maplibregl.Marker({ element: el })
         .setLngLat([bin.lng, bin.lat])
-        .setPopup(popup)
         .addTo(map);
 
       el.addEventListener("click", (e) => {
@@ -714,6 +720,9 @@ function MapCanvas({
     <>
       <div ref={containerRef} id="map" />
       <div className="map-zoom-badge">Zoom {zoom.toFixed(1)}x</div>
+      {selectedBin && (
+        <SiteInfoPanel bin={selectedBin} onClose={() => setSelectedBin(null)} />
+      )}
     </>
   );
 }
