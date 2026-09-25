@@ -117,6 +117,7 @@ function MapCanvas({
   onMapReady,
   initialCenter,
   initialZoom,
+  autoplayArea,
   searchArea,
 }) {
   const containerRef = useRef(null);
@@ -142,8 +143,8 @@ function MapCanvas({
       style: SAT_STYLE,
       center: initialCenter
         ? [initialCenter.lng, initialCenter.lat]
-        : [-95.5, 40.5],
-      zoom: initialZoom ?? 4.2,
+        : [-85.2, 45.5],
+      zoom: initialZoom ?? 2.3,
       attributionControl: true,
     });
     map.addControl(
@@ -162,13 +163,8 @@ function MapCanvas({
       flyTo(lat, lng, zoom = 9) {
         mapRef.current?.flyTo({ center: [lng, lat], zoom, duration: 1400 });
       },
-      selectBin(bin, zoom = 17.4) {
-        const map = mapRef.current;
-        if (!map) return;
-        map.flyTo({ center: [bin.lng, bin.lat], zoom, duration: 1400 });
-        map.getSource("bin-detections")?.setData(detectionFeatures(bin));
-        const marker = markersRef.current.get(bin.id);
-        if (marker && !marker.getPopup().isOpen()) marker.togglePopup();
+      selectBin(bin, zoom = 16.5) {
+        selectBin(mapRef.current, bin, zoom);
       },
     });
 
@@ -185,6 +181,46 @@ function MapCanvas({
       countyGeoJSON.current = countiesFC;
       statesGeoJSON.current = statesFC;
       addAllLayers(map);
+
+      if (autoplayArea) {
+        setTimeout(() => {
+          map.flyTo({
+            center: [autoplayArea.lng, autoplayArea.lat],
+            zoom: 9,
+            duration: 3000,
+          });
+          map.once("moveend", () => {
+            const point = map.project([autoplayArea.lng, autoplayArea.lat]);
+            const hits = map.queryRenderedFeatures(point, {
+              layers: ["county-fill"],
+            });
+            const f = hits[0];
+            if (!f) return; // seed location didn't land on a county polygon -- nothing to click
+
+            if (selectedIdRef.current !== null) {
+              map.setFeatureState(
+                { source: "counties", id: selectedIdRef.current },
+                { selected: false },
+              );
+            }
+            selectedIdRef.current = f.id;
+            map.setFeatureState(
+              { source: "counties", id: f.id },
+              { selected: true },
+            );
+
+            const name = f.properties.name;
+            const state = stateAbbrFromFips(f.properties.fips);
+            openScanPopup(
+              map,
+              new maplibregl.LngLat(autoplayArea.lng, autoplayArea.lat),
+              name,
+              state,
+              900, // auto-click the Scan button after this pause
+            );
+          });
+        }, 600);
+      }
     });
 
     return () => {
@@ -195,6 +231,13 @@ function MapCanvas({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // In MapCanvas.jsx, add this effect alongside the existing bins-sync effect
+  useEffect(() => {
+    if (bins.length > 0) {
+      popupRef.current?.remove();
+    }
+  }, [bins]);
+
   function forwardScrollZoom(map, popup) {
     popup.on("open", () => {
       const el = popup.getElement();
@@ -203,6 +246,29 @@ function MapCanvas({
         passive: true,
       });
     });
+  }
+
+  function selectBin(map, bin, zoom = 16.5) {
+    const siteNum = Array.from(markersRef.current.keys()).indexOf(bin.id) + 1;
+
+    map.flyTo({ center: [bin.lng, bin.lat], zoom, duration: 1400 });
+    map.getSource("bin-detections")?.setData(detectionFeatures(bin));
+
+    const marker = markersRef.current.get(bin.id);
+    if (!marker) return;
+
+    const detailsHTML = `
+    <div class="popup-title">Site #${siteNum}</div>
+    <div class="popup-row"><span>Est. capacity</span><span class="mono">${bin.capacityBushels.toLocaleString()} bu</span></div>
+    <div class="popup-row"><span>Confidence</span>${confidenceBadgeHTML(bin.confidence)}</div>
+    <div class="popup-row"><span>Location</span><span class="mono">${bin.lat.toFixed(4)}°, ${bin.lng.toFixed(4)}°</span></div>
+    <div class="popup-row"><span>Detections</span><span class="mono">${bin.detectionCount} bin(s)</span></div>
+    <button type="button" class="upgrade-owner-btn" title="Upgrade to Pro to unlock owner information">🔒 Upgrade to Pro for owner info</button>
+  `;
+
+    const popup = marker.getPopup();
+    popup.setHTML(detailsHTML);
+    if (!popup.isOpen()) marker.togglePopup();
   }
 
   // Sync bin markers with the `bins` prop (append-only reveal animation).
@@ -241,12 +307,93 @@ function MapCanvas({
       el.addEventListener("click", (e) => {
         e.stopPropagation();
         popupRef.current?.remove(); // close any lingering "Scan this area" popup
+        map.flyTo({ center: [bin.lng, bin.lat], zoom: 16.5, duration: 1400 });
         map.getSource("bin-detections")?.setData(detectionFeatures(bin));
+        // select bin
+        selectBin(mapRef.current, bin, 16.5);
       });
 
       current.set(bin.id, marker);
     });
   }, [bins]);
+
+  function openScanPopup(map, lngLat, name, state, autoClickDelayMs) {
+    const popupNode = document.createElement("div");
+    popupNode.innerHTML = `
+    <div class="popup-title">${name} County, ${state}</div>
+    <div class="popup-scan-prompt">Scan this area for grain bins</div>
+  `;
+
+    const scanBtn = document.createElement("button");
+    scanBtn.type = "button";
+    scanBtn.className = "popup-scan-btn";
+    scanBtn.textContent = "Scan";
+    let scanning = false;
+
+    scanBtn.addEventListener("click", async () => {
+      if (scanning) {
+        onStopScan?.();
+        scanning = false;
+        isScanningRef.current = false;
+        activeScanBtnRef.current = null;
+        searchCircleRef.current?.stopSweep();
+        return;
+      }
+
+      scanning = true;
+      isScanningRef.current = true;
+      activeScanBtnRef.current = scanBtn;
+      scanBtn.textContent = "Stop scan";
+      searchCircleRef.current?.startSweep();
+
+      applyCdlTiles(map, {
+        lat: lngLat.lat,
+        lng: lngLat.lng,
+        radiusMiles: 12,
+      });
+
+      try {
+        const bins = await onScanRequest?.({
+          lat: lngLat.lat,
+          lng: lngLat.lng,
+          name,
+          state,
+        });
+        // remove the scan btn
+        scanBtn.remove();
+      } catch (err) {
+        if (err?.name === "AbortError") {
+          scanBtn.textContent = "Scan stopped. Click to retry";
+        } else {
+          console.error("Scan failed:", err);
+          scanBtn.textContent = "Scan failed — retry";
+        }
+      } finally {
+        scanning = false;
+        isScanningRef.current = false;
+        activeScanBtnRef.current = null;
+        searchCircleRef.current?.stopSweep();
+      }
+    });
+    popupNode.appendChild(scanBtn);
+
+    popupRef.current?.remove();
+    popupRef.current = new maplibregl.Popup({
+      closeButton: false,
+      closeOnClick: false,
+    })
+      .setLngLat(lngLat)
+      .setDOMContent(popupNode)
+      .addTo(map);
+    forwardScrollZoom(map, popupRef.current);
+
+    searchCircleRef.current?.remove();
+    searchCircleRef.current = createSearchCircle(map, lngLat, 12);
+
+    if (autoClickDelayMs) {
+      setTimeout(() => scanBtn.click(), autoClickDelayMs);
+    }
+  }
 
   function addAllLayers(map) {
     if (map.getSource("counties")) return;
@@ -480,12 +627,9 @@ function MapCanvas({
       const f = e.features?.[0];
       if (!f) return;
 
-      // any new selection restores the crop layer, in case it was hidden
-      // by a previous scan
       if (map.getLayer("nass-cdl-layer")) {
         map.setLayoutProperty("nass-cdl-layer", "visibility", "visible");
       }
-
       if (selectedIdRef.current !== null) {
         map.setFeatureState(
           { source: "counties", id: selectedIdRef.current },
@@ -497,90 +641,17 @@ function MapCanvas({
 
       const name = f.properties.name;
       const state = stateAbbrFromFips(f.properties.fips);
-      const countyBbox = bbox(f.geometry); // [minLng, minLat, maxLng, maxLat]
-
-      const popupNode = document.createElement("div");
-      popupNode.innerHTML = `
-        <div class="popup-title">${name} County, ${state}</div>
-        <div class="popup-row"><span>FIPS</span><span class="mono">${f.properties.fips}</span></div>
-        <div class="popup-scan-prompt">Scan this area for grain bins</div>
-      `;
-
-      const scanBtn = document.createElement("button");
-      scanBtn.type = "button";
-      scanBtn.className = "popup-scan-btn";
-      scanBtn.textContent = "Scan";
-      let scanning = false;
-
-      scanBtn.addEventListener("click", async () => {
-        if (scanning) {
-          onStopScan?.();
-          scanning = false;
-          isScanningRef.current = false;
-          activeScanBtnRef.current = null;
-          searchCircleRef.current?.stopSweep();
-          return;
-        }
-
-        scanning = true;
-        isScanningRef.current = true;
-        activeScanBtnRef.current = scanBtn;
-        scanBtn.textContent = "Stop scan";
-        searchCircleRef.current?.startSweep();
-
-        applyCdlTiles(map, {
-          lat: e.lngLat.lat,
-          lng: e.lngLat.lng,
-          radiusMiles: 18,
-        });
-
-        try {
-          const bins = await onScanRequest?.({
-            lat: e.lngLat.lat,
-            lng: e.lngLat.lng,
-            name,
-            state,
-          });
-          scanBtn.textContent =
-            bins?.length > 0 ? `Found ${bins.length}` : "No bins found";
-        } catch (err) {
-          if (err?.name === "AbortError") {
-            scanBtn.textContent = "Scan stopped. Click to retry";
-          } else {
-            console.error("Scan failed:", err);
-            scanBtn.textContent = "Scan failed — retry";
-          }
-        } finally {
-          scanning = false;
-          isScanningRef.current = false;
-          activeScanBtnRef.current = null;
-          searchCircleRef.current?.stopSweep();
-        }
-      });
-      popupNode.appendChild(scanBtn);
-
-      popupRef.current?.remove();
-      popupRef.current = new maplibregl.Popup({
-        closeButton: false,
-        closeOnClick: false,
-      })
-        .setLngLat(e.lngLat)
-        .setDOMContent(popupNode)
-        .addTo(map);
-      forwardScrollZoom(map, popupRef.current);
+      openScanPopup(map, e.lngLat, name, state);
 
       onCountyClick?.({
         fips: f.properties.fips,
         name,
         state,
         geometry: f.geometry,
-        bbox: countyBbox,
+        bbox: bbox(f.geometry),
         lat: e.lngLat.lat,
         lng: e.lngLat.lng,
       });
-
-      searchCircleRef.current?.remove();
-      searchCircleRef.current = createSearchCircle(map, e.lngLat, 18);
     });
 
     map.on("click", (e) => {

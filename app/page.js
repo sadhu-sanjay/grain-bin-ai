@@ -12,8 +12,6 @@ const MapCanvas = dynamic(() => import("@/components/MapCanvas"), {
   ssr: false,
 });
 
-import seedScan from "@/data/seed-scan.json";
-
 // Starting position now comes directly from the shipped scan result,
 // not a hardcoded location.
 const DEFAULT_AREA = {
@@ -35,6 +33,7 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [hoveredCounty, setHoveredCounty] = useState(null);
   const [hitTarget, setHitTarget] = useState(false);
+  const seedPendingRef = useRef(true);
 
   // Fires the moment a county is clicked, so the circle appears right
   // alongside the popup -- before Scan is even pressed.
@@ -51,9 +50,22 @@ export default function Home() {
     setHitTarget(false);
     setArea({ label: `${name} County, ${state}`, lat, lng, radiusMiles: 3 });
 
+    if (seedPendingRef.current) {
+      seedPendingRef.current = false;
+      try {
+        await new Promise((r) => setTimeout(r, 1000)); // stand-in for real scan latency
+        const bins = seedScan.bins ?? [];
+        setAllBins(bins);
+        setHitTarget(Boolean(seedScan.hitTarget));
+        return bins;
+      } finally {
+        setLoading(false);
+        scanControllerRef.current = null;
+      }
+    }
+
     const controller = new AbortController();
     scanControllerRef.current = controller;
-
     try {
       const res = await fetch("/api/scan-location", {
         method: "POST",
@@ -76,15 +88,6 @@ export default function Home() {
     scanControllerRef.current?.abort();
   }
 
-
-  // Auto-run detection on the default area the moment the app loads —
-  // this is a real (mocked) detection call, not hard-coded pins.
-  useEffect(() => {
-    setArea(DEFAULT_AREA);
-    setAllBins(seedScan.bins ?? []);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   // Drop-in reveal animation: append one bin at a time from `allBins`.
   useEffect(() => {
     if (allBins.length === 0) return;
@@ -104,7 +107,7 @@ export default function Home() {
   }
 
   function handleResultClick(bin) {
-    mapRef.current?.selectBin(bin, 18.4);
+    mapRef.current?.selectBin(bin, 16.4);
   }
 
   return (
@@ -115,8 +118,7 @@ export default function Home() {
         }}
         bins={revealedBins}
         onCountyHover={setHoveredCounty}
-        initialCenter={{ lat: DEFAULT_AREA.lat, lng: DEFAULT_AREA.lng }}
-        initialZoom={9}
+        autoplayArea={DEFAULT_AREA}
         searchArea={area}
         onScanRequest={scanArea}
         onStopScan={stopScan}
