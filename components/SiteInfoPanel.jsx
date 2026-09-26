@@ -1,5 +1,8 @@
 // components/SiteInfoPanel.jsx
 "use client";
+"use client";
+
+import AnnotatedThumbnail from "./AnnotatedThumbnail";
 
 function confidenceTier(c) {
   if (c >= 0.8) return "high";
@@ -24,19 +27,24 @@ export default function SiteInfoPanel({ bin, onClose }) {
           &times;
         </button>
       </div>
+      <AnnotatedThumbnail bin={bin} className="thumb-wrap-large" />
       <div className="popup-row">
         <span>Est. capacity</span>
         <span className="mono">{bin.capacityBushels.toLocaleString()} bu</span>
       </div>
       <div className="popup-row">
         <span>Confidence</span>
-        <span className={`confidence-badge ${confidenceTier(bin.confidence ?? 0)}`}>
+        <span
+          className={`confidence-badge ${confidenceTier(bin.confidence ?? 0)}`}
+        >
           {pct}%
         </span>
       </div>
       <div className="popup-row">
         <span>Location</span>
-        <span className="mono">{bin.lat.toFixed(4)}°, {bin.lng.toFixed(4)}°</span>
+        <span className="mono">
+          {bin.lat.toFixed(4)}°, {bin.lng.toFixed(4)}°
+        </span>
       </div>
       <div className="popup-row">
         <span>Detections</span>

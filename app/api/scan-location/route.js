@@ -11,7 +11,7 @@ const KM_PER_DEG_LAT = 110.574; // ~constant everywhere
 
 const DEFAULT_BOX_MILES = 6;
 const TARGET_BINS = 5; // keep scanning candidates until we have at least this many
-const MAX_CANDIDATES_TO_SCAN = 25; // hard safety ceiling on Roboflow calls per scan
+const MAX_CANDIDATES_TO_SCAN = 55; // hard safety ceiling on Roboflow calls per scan
 const CANDIDATE_CONCURRENCY = 5; // how many candidates to chip+detect at once
 
 function bboxAroundPoint(lon, lat, boxMiles) {
@@ -128,6 +128,8 @@ export async function POST(req) {
                 primary: idx === 0,
               }),
             ),
+            chipImage: chip.url,
+            chipBounds: chip.bounds,
           };
         }
 

@@ -1,5 +1,7 @@
 "use client";
 
+import AnnotatedThumbnail from "./AnnotatedThumbnail";
+
 function confidenceTier(c) {
   if (c >= 0.8) return "high";
   if (c >= 0.6) return "medium";
@@ -59,17 +61,22 @@ export default function ResultsPanel({
             key={bin.id}
             onClick={() => onResultClick(bin)}
           >
-            <div className="r-top">
-              <span className="r-name">Site #{i + 1}</span>
-              <ConfidenceBadge confidence={bin.confidence} />
-            </div>
-            <div className="r-meta">
-              <span className="mono">
-                ~{bin.capacityBushels.toLocaleString()} bu
-              </span>
-              <span className="mono">
-                {bin.lat.toFixed(3)}, {bin.lng.toFixed(3)}
-              </span>
+            <div className="r-row">
+              <AnnotatedThumbnail bin={bin} />
+              <div className="r-content">
+                <div className="r-top">
+                  <span className="r-name">Site #{i + 1}</span>
+                  <ConfidenceBadge confidence={bin.confidence} />
+                </div>
+                <div className="r-meta">
+                  <span className="mono">
+                    ~{bin.capacityBushels.toLocaleString()} bu
+                  </span>
+                  <span className="mono">
+                    {bin.lat.toFixed(3)}, {bin.lng.toFixed(3)}
+                  </span>
+                </div>
+              </div>
             </div>
             <button
               type="button"

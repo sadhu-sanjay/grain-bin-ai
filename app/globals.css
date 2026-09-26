@@ -361,7 +361,9 @@ body {
   cursor: pointer;
   animation: bin-pop 0.4s ease-out;
   box-shadow: 0 3px 10px rgba(0, 0, 0, 0.45);
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease;
 }
 .bin-marker svg {
   width: 15px;
@@ -373,15 +375,21 @@ body {
 }
 .bin-marker.high {
   background: #5ed68f;
-  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.45), 0 0 0 3px rgba(94, 214, 143, 0.25);
+  box-shadow:
+    0 3px 10px rgba(0, 0, 0, 0.45),
+    0 0 0 3px rgba(94, 214, 143, 0.25);
 }
 .bin-marker.medium {
   background: var(--wheat-500);
-  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.45), 0 0 0 3px rgba(201, 162, 39, 0.25);
+  box-shadow:
+    0 3px 10px rgba(0, 0, 0, 0.45),
+    0 0 0 3px rgba(201, 162, 39, 0.25);
 }
 .bin-marker.low {
   background: #e0362f;
-  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.45), 0 0 0 3px rgba(224, 54, 47, 0.25);
+  box-shadow:
+    0 3px 10px rgba(0, 0, 0, 0.45),
+    0 0 0 3px rgba(224, 54, 47, 0.25);
 }
 
 @keyframes bin-pop {
@@ -472,7 +480,6 @@ body {
 .upgrade-owner-btn:hover {
   background: rgba(201, 162, 39, 0.26);
 }
-
 
 /* ---------------- "Upgrade to Pro" results-list banner ---------------- */
 .upgrade-banner {
@@ -591,12 +598,20 @@ body {
   position: absolute;
   inset: 0;
   border-radius: 50%;
-  background: conic-gradient(from 0deg, rgba(59, 160, 255, 0.4) 0deg, rgba(59, 160, 255, 0) 70deg);
+  background: conic-gradient(
+    from 0deg,
+    rgba(59, 160, 255, 0.4) 0deg,
+    rgba(59, 160, 255, 0) 70deg
+  );
   animation: radar-spin 1.5s linear infinite;
 }
 @keyframes radar-spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .maplibregl-popup {
@@ -604,10 +619,23 @@ body {
 }
 
 @keyframes shake-x {
-  10%, 90% { transform: translateX(-1px); }
-  20%, 80% { transform: translateX(2px); }
-  30%, 50%, 70% { transform: translateX(-4px); }
-  40%, 60% { transform: translateX(4px); }
+  10%,
+  90% {
+    transform: translateX(-1px);
+  }
+  20%,
+  80% {
+    transform: translateX(2px);
+  }
+  30%,
+  50%,
+  70% {
+    transform: translateX(-4px);
+  }
+  40%,
+  60% {
+    transform: translateX(4px);
+  }
 }
 
 .popup-scan-btn.shake {
@@ -662,4 +690,57 @@ body {
   border-radius: 10px;
   padding: 16px;
   z-index: 5;
+}
+
+.r-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+.r-content {
+  flex: 1;
+  min-width: 0; /* lets text truncate instead of overflowing the row */
+}
+
+.thumb-wrap {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.thumb-wrap-large {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1 / 1; /* chip is a square image, no cropping needed at this size */
+  margin-top: 10px;
+}
+.thumb-wrap-large .thumb-img {
+  object-fit: contain; /* show the whole chip, not cropped like the list thumbnail */
+}
+
+.thumb-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover; /* crop to fill the square instead of squishing */
+}
+
+.thumb-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.det-box {
+  fill: none;
+  stroke-width: 2;
+}
+.det-box.det-primary {
+  stroke: var(--wheat-500);
+}
+.det-box.det-secondary {
+  stroke: var(--paper-500);
+  stroke-dasharray: 3 2;
 }
