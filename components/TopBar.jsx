@@ -171,7 +171,7 @@ export default function TopBar({ onSearch, hoveredCounty, searching }) {
             onFocus={() => suggestions.length > 0 && setOpen(true)}
           />
           <button className="search-btn" type="submit" disabled={searching}>
-            {searching ? "Scanning…" : "Find bins"}
+            Search
           </button>
         </form>
 

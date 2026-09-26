@@ -139,7 +139,6 @@ function MapCanvas({
   const popupRef = useRef(null);
   const searchCircleRef = useRef(null);
   const isScanningRef = useRef(false);
-  const activeScanBtnRef = useRef(null);
 
   const [zoom, setZoom] = useState(initialZoom ?? 4.2);
   const [selectedBin, setSelectedBin] = useState(null);
@@ -174,6 +173,9 @@ function MapCanvas({
       },
       selectBin(bin, zoom = 16.5) {
         selectBin(mapRef.current, bin, zoom);
+      },
+      closeSitePanel() {
+        setSelectedBin(null);
       },
     });
 
@@ -240,9 +242,13 @@ function MapCanvas({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // In MapCanvas.jsx, add this effect alongside the existing bins-sync effect
+  // Closes the "Scan this area" prompt popup once results start coming in.
+  // Guarded on isScanningRef: while a scan is actively running, popupRef
+  // holds the SAME popup instance as the Stop-scan button (openScanPopup
+  // reuses it), so removing it here mid-scan would silently kill the
+  // ability to stop the scan the moment the first bin was revealed.
   useEffect(() => {
-    if (bins.length > 0) {
+    if (bins.length > 0 && !isScanningRef.current) {
       popupRef.current?.remove();
     }
   }, [bins]);
@@ -313,10 +319,7 @@ function MapCanvas({
       el.addEventListener("click", (e) => {
         e.stopPropagation();
         popupRef.current?.remove(); // close any lingering "Scan this area" popup
-        map.flyTo({ center: [bin.lng, bin.lat], zoom: 16.5, duration: 1400 });
-        map.getSource("bin-detections")?.setData(detectionFeatures(bin));
-        // select bin
-        selectBin(mapRef.current, bin, 16.5);
+        selectBin(mapRef.current, bin, 16.5); // handles flyTo + detection outline itself
       });
 
       current.set(bin.id, marker);
@@ -337,47 +340,23 @@ function MapCanvas({
     let scanning = false;
 
     scanBtn.addEventListener("click", async () => {
-      if (scanning) {
-        onStopScan?.();
-        scanning = false;
-        isScanningRef.current = false;
-        activeScanBtnRef.current = null;
-        searchCircleRef.current?.stopSweep();
-        return;
-      }
-
-      scanning = true;
       isScanningRef.current = true;
-      activeScanBtnRef.current = scanBtn;
-      scanBtn.textContent = "Stop scan";
       searchCircleRef.current?.startSweep();
+      popupRef.current?.remove(); // scan starts -- stopping now happens from the ScanProgress panel, not here
 
-      applyCdlTiles(map, {
-        lat: lngLat.lat,
-        lng: lngLat.lng,
-        radiusMiles: 12,
-      });
+      applyCdlTiles(map, { lat: lngLat.lat, lng: lngLat.lng, radiusMiles: 12 });
 
       try {
-        const bins = await onScanRequest?.({
+        await onScanRequest?.({
           lat: lngLat.lat,
           lng: lngLat.lng,
           name,
           state,
         });
-        // remove the scan btn
-        scanBtn.remove();
       } catch (err) {
-        if (err?.name === "AbortError") {
-          scanBtn.textContent = "Scan stopped. Click to retry";
-        } else {
-          console.error("Scan failed:", err);
-          scanBtn.textContent = "Scan failed — retry";
-        }
+        if (err?.name !== "AbortError") console.error("Scan failed:", err);
       } finally {
-        scanning = false;
         isScanningRef.current = false;
-        activeScanBtnRef.current = null;
         searchCircleRef.current?.stopSweep();
       }
     });
@@ -626,10 +605,8 @@ function MapCanvas({
     });
 
     map.on("click", "county-fill", (e) => {
-      if (isScanningRef.current) {
-        shakeStopButton();
-        return;
-      }
+      if (isScanningRef.current) return;
+
       const f = e.features?.[0];
       if (!f) return;
 
@@ -661,10 +638,7 @@ function MapCanvas({
     });
 
     map.on("click", (e) => {
-      if (isScanningRef.current) {
-        shakeStopButton();
-        return;
-      }
+      if (isScanningRef.current) return;
       const hits = map.queryRenderedFeatures(e.point, {
         layers: ["county-fill"],
       });
@@ -672,14 +646,6 @@ function MapCanvas({
         popupRef.current?.remove();
       }
     });
-  }
-
-  function shakeStopButton() {
-    const btn = activeScanBtnRef.current;
-    if (!btn) return;
-    btn.classList.remove("shake");
-    void btn.offsetWidth; // force reflow so it can replay if already mid-shake
-    btn.classList.add("shake");
   }
 
   // add near the top of the component, above addAllLayers

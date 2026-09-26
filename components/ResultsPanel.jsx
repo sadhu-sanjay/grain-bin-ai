@@ -22,17 +22,29 @@ export default function ResultsPanel({
   hitTarget,
   loading,
   onResultClick,
+  onStop,
 }) {
   return (
     <div className="results">
       <div className="results-header">
         <div className="title">
           {loading && <span className="spinner" />}
-          {loading
-            ? "Scanning for storage sites…"
-            : hitTarget
-              ? `At least ${totalBins} bins found`
-              : `${totalBins} bins found`}
+          <span className="title-text">
+            {loading
+              ? "Scanning for storage sites…"
+              : hitTarget
+                ? `At least ${totalBins} bins found`
+                : `${totalBins} bins found`}
+          </span>
+          {loading && (
+            <button
+              type="button"
+              className="stop-scan-btn"
+              onClick={onStop}
+            >
+              Stop
+            </button>
+          )}
         </div>
         <div className="sub">
           {area
