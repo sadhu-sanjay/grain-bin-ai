@@ -1,0 +1,5 @@
+env:
+  - variable: ROBOFLOW_API_KEY
+    secret: ROBOFLOW_API_KEY
+  - variable: EE_SERVICE_ACCOUNT_KEY
+    secret: EE_SERVICE_ACCOUNT_KEY
