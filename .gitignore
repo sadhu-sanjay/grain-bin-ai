@@ -40,4 +40,3 @@ coverage/
 # logs
 logs/
 *.log
-package-lock.json
