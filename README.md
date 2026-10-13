@@ -1,5 +1,9 @@
 # Grain Bin AI: Grain storage site detection on satellite imagery
 
+https://github.com/user-attachments/assets/264f3319-3064-40f5-a952-4e2126cfa0d7
+
+
+
 <span style="display:inline-block;background:#ec38c4;color:#fff;padding:0.5rem 1rem;border-radius:999px;font-weight:700;font-size:1.5rem;line-height:1;">NEW</span>
 
 Full-stack and computer vision development for a lead-generation tool that finds grain storage bins across the US. Users select a county to start a live scan: building footprints locate farmsteads, DBSCAN clusters them, NAIP aerial imagery is fetched through Google Earth Engine, and a custom RF-DETR model trained on Roboflow detects bins. Results appear as georeferenced boxes on a satellite map. Piloted in Kansas, North Dakota, and Arkansas; scans stop after finding 10 bins.
